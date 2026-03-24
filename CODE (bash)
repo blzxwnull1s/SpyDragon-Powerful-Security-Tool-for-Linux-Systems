@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+# ╔══════════════════════════════════════════════════════════════╗
+# ║           SPY DRAGON v.2 — OSINT TOOLKIT                     ║
+# ║           Arch Linux — Bash Edition                          ║
+# ║  Solo uso ético | Solo sistemas con autorización             ║
+# ║  Author: blzxwnull1s  │  github.com/blzxwnull1s             ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Dependencias: curl, jq
+# Instalar: sudo pacman -S curl jq
+#
+# Uso:
+#   chmod +x spy_dragon.sh
+#   ./spy_dragon.sh
+
+# ─── API KEY ─────────────────────────────────────────────────────────────────
+# Pon tu API key aquí o expórtala antes: export ANTHROPIC_API_KEY="sk-ant-..."
+: "${ANTHROPIC_API_KEY:=}"
+
+# ─── Colores ANSI ─────────────────────────────────────────────────────────────
+RESET="\033[0m"
+BOLD="\033[1m"
+GREEN="\033[92m"
+CYAN="\033[96m"
+YELLOW="\033[93m"
+RED="\033[91m"
+MAGENTA="\033[95m"
+WHITE="\033[97m"
+DGREEN="\033[32m"
+GRAY="\033[90m"
+
+# ─── Utilidades ───────────────────────────────────────────────────────────────
+c()   { printf "${1}${2}${RESET}"; }
+cl()  { printf "${1}${2}${RESET}\n"; }
+sep() { cl "$DGREEN" "──────────────────────────────────────────────────────────────"; }
+
+tag() {
+    local t="$1" color="${2:-$GREEN}"
+    printf "${color}[${t}]${RESET}"
+}
+
+print_result_line() {
+    local line="$1"
+    case "$line" in
+        \[\+\]*|✓*)   cl "$GREEN"   "$line" ;;
+        \[\-\]*|\[!\]*|✗*) cl "$RED" "$line" ;;
+        \[\*\]*|\[~\]*) cl "$CYAN"  "$line" ;;
+        \[\>\]*|→*|▶*) cl "$YELLOW" "$line" ;;
+        ═*|─*|╔*|╗*|╚*|╝*|║*) cl "$DGREEN" "$line" ;;
+        \#*|==*)        cl "$MAGENTA" "$line" ;;
+        "")             echo "" ;;
+        *)              cl "$WHITE" "$line" ;;
+    esac
+}
+
+spinner() {
+    local msg="$1"
+    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    local msgs=(
+        "Conectando con base de datos OSINT"
+        "Analizando objetivo"
+        "Recopilando inteligencia"
+        "Procesando resultados"
+        "Compilando informe"
+    )
+    local i=0 elapsed=0 pct=0
+    local start=$SECONDS
+
+    while kill -0 "$BGPID" 2>/dev/null; do
+        elapsed=$(( SECONDS - start ))
+        local midx=$(( elapsed / 2 ))
+        [[ $midx -ge ${#msgs[@]} ]] && midx=$(( ${#msgs[@]} - 1 ))
+        local cmsg="${msgs[$midx]}"
+        pct=$(( elapsed * 8 ))
+        [[ $pct -gt 95 ]] && pct=95
+        local filled=$(( pct / 5 ))
+        local empty=$(( 20 - filled ))
+        local bar
+        bar="$(printf '█%.0s' $(seq 1 $filled 2>/dev/null))$(printf '░%.0s' $(seq 1 $empty 2>/dev/null))"
+        printf "\r  ${GREEN}${frames[$((i % ${#frames[@]}))]}${RESET}  ${DGREEN}${cmsg}...${RESET}  ${GREEN}[${bar}]${RESET} ${YELLOW}${pct}%%${RESET}   "
+        sleep 0.1
+        (( i++ ))
+    done
+    printf "\r  ${GREEN}✔${RESET}  ${DGREEN}Análisis completado.${RESET}%40s\n" ""
+}
+
+typewrite() {
+    local text="$1" color="${2:-$GREEN}" delay="${3:-0.012}"
+    local i=0
+    while [[ $i -lt ${#text} ]]; do
+        printf "${color}${text:$i:1}${RESET}"
+        sleep "$delay"
+        (( i++ ))
+    done
+    echo
+}
+
+# ─── Banner ────────────────────────────────────────────────────────────────────
+show_banner() {
+    clear
+    # Dragon ASCII art
+    cl "$RED" "                                                        /\\"
+    cl "$RED" "                                                       /  \\"
+    cl "$YELLOW" "             ░▒▓███ SPY DRAGON ███▓▒░               /  /\\ \\"
+    cl "$RED" "          __                                        /  / _\\_/\\"
+    cl "$RED" "      ___( o)>   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~      / _/ /     \\"
+    cl "$RED" "      \\ <_. )    I N T E L L I G E N C E        /_/  /   ,-. |"
+    cl "$RED" "       \`---'     O P E N   S O U R C E          \\   /   /   \\ |"
+    cl "$YELLOW" "   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\\_/ |  \\___/|"
+    cl "$YELLOW" "                                                     |  |      |"
+    echo
+    cl "$DGREEN" "  ╔══════════════════════════════════════════════════════════════╗"
+    printf "  ║  ${RED}${BOLD}  🐉  SPY DRAGON v.2 — OSINT TOOLKIT  🐉  ${RESET}${DGREEN}              ║\n"
+    printf "  ║  ${CYAN}  La información es el arma más poderosa del mundo.  ${RESET}${DGREEN}   ║\n"
+    printf "  ║  ${YELLOW}  ▲ Solo uso ético │ Solo con autorización ▲         ${DGREEN}   ║\n"
+    cl "$DGREEN" "  ╠══════════════════════════════════════════════════════════════╣"
+    printf "  ║  ${MAGENTA}  Author : ${WHITE}blzxwnull1s${RESET}${DGREEN}%*s║\n" 43 ""
+    printf "  ║  ${MAGENTA}  GitHub : ${CYAN}github.com/blzxwnull1s${RESET}${DGREEN}%*s║\n" 40 ""
+    cl "$DGREEN" "  ╚══════════════════════════════════════════════════════════════╝"
+}
+
+# ─── Menú ──────────────────────────────────────────────────────────────────────
+# Formato: "NUM|LABEL|CAT|INPUT_DESC"
+TOOLS=(
+    "01|IP Info / Lookup|ip|IP o dominio (ej: 8.8.8.8)"
+    "02|GeoIP de IP|geo|IP a geolocalizar"
+    "03|WHOIS Dominio|whois|Dominio (ej: example.com)"
+    "04|DNS Lookup|dns|Dominio para DNS lookup"
+    "05|Cabeceras HTTP|http|URL completa (con https://)"
+    "06|Ping Host|ping|Host o IP"
+    "07|Traceroute|trace|Host destino"
+    "08|Puertos Abiertos|ports|IP/Host a escanear"
+    "09|Info SSL/TLS|ssl|Dominio (ej: google.com)"
+    "10|Subdominios OSINT|sub|Dominio raíz"
+    "11|Info número teléfono|phone|Número con código país (+1...)"
+    "12|GeoIP de teléfono|phone_geo|Número con código país"
+    "13|Carrier / Operadora|carrier|Número de teléfono"
+    "14|Análisis de Email|email|Dirección de email"
+    "15|Cabecera de Email|email_hdr|Pega cabeceras del email"
+    "16|Email en brechas|breach|Email a verificar"
+    "17|robots.txt OSINT|robots|Dominio (sin https://)"
+    "18|Dominio → IP|d2ip|Dominio a resolver"
+    "19|Tecnologías web|tech|URL del sitio web"
+    "20|Reputación IP|rep|IP a verificar"
+    "21|Sherlock (usuario)|sherlock|Nombre de usuario"
+    "22|Buscar en Pastebin|paste|Término a buscar"
+    "23|Google Dork básico|dork|Término o dork (ej: site:x.com)"
+    "24|Info de foto (EXIF)|exif|URL de imagen"
+    "25|Hash de archivo|hash|Texto o hash a analizar"
+    "26|Detectar VPN/Proxy|vpn|IP a verificar"
+    "27|TOR Exit Nodes|tor|IP (vacío = lista general)"
+    "28|Buscar en Shodan|shodan|Query de búsqueda Shodan"
+    "29|IP Negra / Blocklist|blacklist|IP a verificar en blacklists"
+    "30|Reputación dominio|domain_rep|Dominio a analizar"
+    "31|Mi IP pública|myip|"
+    "32|Red local info|localnet|"
+    "33|Escaneo red local|lanscan|Rango IP (ej: 192.168.1.0/24)"
+    "34|Puerto específico|portcheck|IP:Puerto (ej: 1.1.1.1:443)"
+    "35|Geoloc coordenadas|coords|Coordenadas lat,lon (ej: 40.4,-3.7)"
+    "36|Whois IP|whoisip|IP para WHOIS"
+    "37|Análisis de URL|url|URL completa a analizar"
+    "38|IP desde Email|email_ip|Cabeceras del email"
+    "39|Generar reporte|report|Tema del reporte OSINT"
+    "40|Ayuda y legal|help|"
+)
+
+print_menu() {
+    show_banner
+    echo
+    cl "$DGREEN" "  ╔══════════════════════════════════════════════════════════╗"
+    printf "  ║  ${CYAN}${BOLD}🐉  MENÚ PRINCIPAL — SPY DRAGON v.2  🐉${RESET}${DGREEN}         ║\n"
+    cl "$DGREEN" "  ╠════════════════════════════╦═════════════════════════════╣"
+
+    local half=$(( ${#TOOLS[@]} / 2 ))
+    local i=0
+    while [[ $i -lt $half ]]; do
+        local litem="${TOOLS[$i]}"
+        local ritem="${TOOLS[$(( i + half ))]}"
+
+        local lnum="${litem%%|*}"; local lrest="${litem#*|}"; local llabel="${lrest%%|*}"
+        local rnum="${ritem%%|*}"; local rrest="${ritem#*|}"; local rlabel="${rrest%%|*}"
+
+        local lraw="[$lnum] $llabel"
+        local rraw="[$rnum] $rlabel"
+        local lpad=$(( 26 - ${#lraw} ))
+        local rpad=$(( 27 - ${#rraw} ))
+        [[ $lpad -lt 0 ]] && lpad=0
+        [[ $rpad -lt 0 ]] && rpad=0
+
+        printf "  ${DGREEN}║${RESET} ${CYAN}[${lnum}]${RESET} ${GREEN}${llabel}${RESET}%${lpad}s${DGREEN}║${RESET} ${CYAN}[${rnum}]${RESET} ${GREEN}${rlabel}${RESET}%${rpad}s${DGREEN}║${RESET}\n" "" ""
+        (( i++ ))
+    done
+
+    cl "$DGREEN" "  ╠════════════════════════════╩═════════════════════════════╣"
+    printf "  ║${RED}${BOLD}%58s${RESET}${DGREEN}║\n" "[00] SALIR"
+    cl "$DGREEN" "  ╚══════════════════════════════════════════════════════════╝"
+    echo
+    printf "  ${GREEN}[spy@dragon]${RESET} ${DGREEN}Selecciona una opción: ${RESET}"
+}
+
+# ─── System Prompt ────────────────────────────────────────────────────────────
+SYSTEM_PROMPT="Eres un sistema experto en ciberseguridad y OSINT (Open Source Intelligence).
+El usuario está usando una herramienta de terminal en Arch Linux llamada SPY DRAGON v.2 OSINT TOOLKIT.
+Responde SIEMPRE en español, con formato de terminal ASCII puro (sin markdown, sin **, sin ##).
+Usa estos prefijos:
+[+] = información positiva / encontrado
+[-] = no encontrado / negativo
+[!] = advertencia / peligro
+[*] = información neutral / nota
+[>] = dato importante / resultado clave
+Sé detallado y realista. Simula resultados como si tuvieras acceso a bases de datos OSINT reales.
+NO menciones que eres una IA. Actúa como un sistema OSINT real.
+Máximo 45 líneas de respuesta. Sin código de programación en la respuesta.
+AVISO IMPORTANTE: Todo uso es solo para sistemas con autorización y propósitos éticos."
+
+# ─── Prompts por herramienta ──────────────────────────────────────────────────
+get_prompt() {
+    local cat="$1" target="$2"
+    case "$cat" in
+        ip)         echo "Análisis completo IP/lookup de: ${target}. Incluye: ISP, país, ciudad, ASN, organización, PTR, tipo (residencial/datacenter/VPN), abuso reportado, puertos conocidos." ;;
+        geo)        echo "Geolocaliza la IP: ${target}. Incluye: país, región, ciudad, coordenadas, zona horaria, código postal, ISP, latitud/longitud." ;;
+        whois)      echo "WHOIS completo del dominio: ${target}. Incluye: registrant, organización, email, fechas (creación/expiración), nameservers, registrar, estado ICANN." ;;
+        dns)        echo "DNS Lookup completo para: ${target}. Muestra todos los records: A, AAAA, MX, NS, TXT, CNAME, SOA, PTR. Incluye TTL de cada uno." ;;
+        http)       echo "Analiza cabeceras HTTP de: ${target}. Muestra: Server, X-Powered-By, tecnologías, headers de seguridad (HSTS, CSP, X-Frame), cookies, CORS, redirecciones." ;;
+        ports)      echo "Escaneo de puertos para: ${target}. Lista puertos abiertos con servicio, versión detectada, protocolo. Incluye puertos 21,22,23,25,53,80,110,143,443,3306,5432,6379,8080,8443,27017." ;;
+        sub)        echo "Enumeración de subdominios OSINT para: ${target}. Lista mínimo 20 subdominios con sus IPs, usando fuentes: crt.sh, Virustotal, DNSdumpster, Google, Shodan." ;;
+        phone)      echo "Análisis del número: ${target}. Incluye: país, región, operadora, tipo (móvil/fijo/VoIP), formato E.164, formato nacional, zona horaria." ;;
+        phone_geo)  echo "Geolocalización del número: ${target}. Incluye: país, región específica, ciudad, zona horaria, código de área, operadora." ;;
+        carrier)    echo "Carrier/operadora del número: ${target}. Incluye: operadora actual, operadora original (port), tipo de número, país, estado de portabilidad." ;;
+        email)      echo "Análisis del email: ${target}. Incluye: formato válido, dominio MX, catch-all, disposable/temporal, reputación del dominio, SMTP check." ;;
+        email_hdr)  echo "Analiza estas cabeceras de email: ${target}. Extrae: IP de origen, ruta completa de servidores, SPF resultado, DKIM resultado, DMARC, fecha/hora envío." ;;
+        breach)     echo "Verifica brechas para: ${target}. Lista brechas conocidas con: nombre, fecha, datos expuestos (emails, passwords, IPs, etc), fuente." ;;
+        robots)     echo "Analiza robots.txt y sitemap de: ${target}. Lista rutas sensibles, directorios admin, APIs expuestas, archivos de configuración encontrados." ;;
+        d2ip)       echo "Resolución dominio a IP de: ${target}. Incluye: todas las IPs (A records), CDN detectado, hosting provider, ASN, TTL, historial DNS." ;;
+        tech)       echo "Detección de tecnologías de: ${target}. Detecta: CMS, framework backend, framework frontend, librerías JS, servidor web, CDN, analytics, WAF, plugins." ;;
+        rep)        echo "Reputación de la IP: ${target}. Verifica en: AbuseIPDB, VirusTotal, Spamhaus, Talos, MXToolbox. Puntuación de amenaza, reportes, categoría." ;;
+        sherlock)   echo "Búsqueda del usuario '${target}' en redes sociales. Lista sitios donde existe con URLs directas: Twitter/X, Instagram, GitHub, Reddit, TikTok, LinkedIn, Facebook, y 20+ más." ;;
+        paste)      echo "Búsqueda en Pastebin y similares: '${target}'. Muestra resultados con: URL del paste, fecha, fragmento relevante, fuente." ;;
+        dork)       echo "Google Dork: ${target}. Muestra resultados simulados relevantes con URLs, títulos y fragmentos. Indica qué información sensible expone." ;;
+        exif)       echo "Metadatos EXIF de imagen en: ${target}. Extrae: GPS (lat/lon), fabricante cámara, modelo, fecha/hora, software, dimensiones, ISO, apertura, velocidad." ;;
+        hash)       echo "Análisis del hash/dato: ${target}. Identifica: tipo de hash (MD5/SHA1/SHA256/bcrypt/etc), si está en rainbow tables, decodificación base64/hex si aplica." ;;
+        vpn)        echo "Detección VPN/Proxy/Tor para: ${target}. Verifica: proveedor VPN detectado, tipo (datacenter/residential/tor/proxy), confianza del resultado, ASN." ;;
+        tor)        echo "Verificación nodo TOR: ${target:-lista de nodos activos}. Lista nodos de salida TOR activos con: IP, país, ancho de banda, flags, uptime." ;;
+        shodan)     echo "Búsqueda Shodan: ${target}. Muestra hosts encontrados con: IP, puertos, servicios, versiones, CVEs conocidos, país, organización." ;;
+        blacklist)  echo "Verificación blacklist DNS para: ${target}. Verifica en 25+ listas negras: Spamhaus ZEN, Barracuda, SORBS, SpamCop, etc. Muestra resultado de cada una." ;;
+        domain_rep) echo "Reputación del dominio: ${target}. Puntuación, categoría (phishing/malware/legítimo), historial, certificados, hosting, IPs asociadas, registros." ;;
+        myip)       echo "Información de la IP pública actual. Muestra: IP, ISP, país, ciudad, ASN, latencia, PTR, tipo de conexión." ;;
+        localnet)   echo "Información de red local del sistema. Muestra: IP local, gateway, DNS servers, máscara subred, DHCP, adaptadores de red activos, MAC addresses." ;;
+        lanscan)    echo "Escaneo de red local: ${target}. Lista hosts activos con: IP, MAC address, fabricante (OUI), hostname, puertos abiertos principales, SO detectado." ;;
+        portcheck)  echo "Verificación de puerto: ${target}. Comprueba si está abierto/cerrado/filtrado. Banner grabbing. Servicio identificado. Latencia de respuesta." ;;
+        coords)     echo "Geolocalización inversa de: ${target}. Dirección postal, ciudad, país, código postal, puntos de interés cercanos, zona horaria, altitud." ;;
+        whoisip)    echo "WHOIS de IP: ${target}. Incluye: RIR (ARIN/RIPE/LACNIC/APNIC), ASN, organización, rango de red, país de registro, abuso contact." ;;
+        url)        echo "Análisis completo de URL: ${target}. Safe browsing status, redirecciones (lista de hops), destino final, certificado SSL, tecnologías, reputación." ;;
+        email_ip)   echo "Extrae IPs de cabeceras de email: ${target}. Traza la ruta completa: todos los servidores relay con IPs, timestamps, protocolos usados." ;;
+        report)     echo "Genera reporte OSINT completo sobre: ${target}. Estructura: 1) Resumen ejecutivo 2) Hallazgos principales 3) Activos identificados 4) Nivel de riesgo 5) Recomendaciones." ;;
+        help)       echo "Muestra ayuda completa del toolkit: comandos disponibles, ejemplos de uso para cada herramienta, consideraciones legales, referencias OSINT." ;;
+        *)          echo "Herramienta OSINT para: ${target}" ;;
+    esac
+}
+
+# ─── Llamada a Claude API ─────────────────────────────────────────────────────
+call_claude() {
+    local cat="$1" target="$2"
+
+    if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+        echo "[!] No se encontró ANTHROPIC_API_KEY."
+        echo "[*] Configúrala con: export ANTHROPIC_API_KEY=\"sk-ant-...\""
+        return 1
+    fi
+
+    local user_msg
+    user_msg="$(get_prompt "$cat" "$target")"
+
+    local payload
+    payload=$(jq -n \
+        --arg model "claude-sonnet-4-20250514" \
+        --arg system "$SYSTEM_PROMPT" \
+        --arg user_msg "$user_msg" \
+        '{
+            model: $model,
+            max_tokens: 1200,
+            system: $system,
+            messages: [{ role: "user", content: $user_msg }]
+        }')
+
+    local response
+    response=$(curl -s --max-time 60 \
+        -X POST "https://api.anthropic.com/v1/messages" \
+        -H "Content-Type: application/json" \
+        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+        -H "anthropic-version: 2023-06-01" \
+        -d "$payload")
+
+    # Verificar error de API
+    local err
+    err=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+    if [[ -n "$err" ]]; then
+        echo "[!] Error API: $err"
+        return 1
+    fi
+
+    # Extraer texto de la respuesta
+    echo "$response" | jq -r '.content[] | select(.type=="text") | .text' 2>/dev/null \
+        || echo "[!] No se pudo parsear la respuesta."
+}
+
+# ─── Herramientas nativas ─────────────────────────────────────────────────────
+native_ping() {
+    ping -c 5 -W 2 "$1" 2>&1
+}
+
+native_traceroute() {
+    if command -v traceroute &>/dev/null; then
+        traceroute -m 15 "$1" 2>&1
+    elif command -v tracepath &>/dev/null; then
+        tracepath "$1" 2>&1
+    else
+        echo "[!] 'traceroute' no instalado. Usa: sudo pacman -S traceroute"
+    fi
+}
+
+native_dns() {
+    if command -v dig &>/dev/null; then
+        dig +noall +answer +authority ANY "$1" 2>&1
+    elif command -v nslookup &>/dev/null; then
+        nslookup "$1" 2>&1
+    else
+        echo "[!] 'dig' no instalado. Usa: sudo pacman -S bind-tools"
+    fi
+}
+
+native_whois() {
+    if command -v whois &>/dev/null; then
+        whois "$1" 2>&1 | head -80
+    else
+        echo "[!] 'whois' no instalado. Usa: sudo pacman -S whois"
+    fi
+}
+
+native_portcheck() {
+    local host port
+    host="${1%:*}"
+    port="${1##*:}"
+    if [[ -z "$host" || -z "$port" ]]; then
+        echo "[!] Formato incorrecto. Usa IP:Puerto (ej: 1.1.1.1:443)"
+        return
+    fi
+    if timeout 3 bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; then
+        echo "[+] Puerto ${port} ABIERTO en ${host}"
+    else
+        echo "[-] Puerto ${port} CERRADO/FILTRADO en ${host}"
+    fi
+}
+
+native_myip() {
+    local ip
+    ip=$(curl -s --max-time 5 "https://api.ipify.org" 2>/dev/null)
+    if [[ -n "$ip" ]]; then
+        echo "[+] Tu IP pública: $ip"
+    else
+        echo "[!] No se pudo obtener la IP pública."
+    fi
+}
+
+native_localnet() {
+    echo "[*] Interfaces de red activas:"
+    ip -brief addr show 2>/dev/null || ifconfig 2>/dev/null | grep -E "inet|flags"
+    echo
+    echo "[*] Gateway:"
+    ip route show default 2>/dev/null || route -n 2>/dev/null | grep "^0.0.0.0"
+    echo
+    echo "[*] DNS servers:"
+    grep "^nameserver" /etc/resolv.conf 2>/dev/null
+}
+
+native_ssl() {
+    local domain="$1"
+    if ! command -v openssl &>/dev/null; then
+        echo "[!] 'openssl' no encontrado."
+        return
+    fi
+    local cert_info
+    cert_info=$(echo | timeout 5 openssl s_client -connect "${domain}:443" -servername "$domain" 2>/dev/null \
+        | openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null)
+    if [[ -n "$cert_info" ]]; then
+        echo "[+] Dominio: $domain"
+        echo "$cert_info" | while IFS= read -r line; do
+            echo "[+] $line"
+        done
+    else
+        echo "[!] No se pudo obtener información SSL de $domain"
+    fi
+}
+
+# ─── Dispatcher ───────────────────────────────────────────────────────────────
+run_native() {
+    local cat="$1" target="$2"
+    case "$cat" in
+        ping)      native_ping "$target" ;;
+        trace)     native_traceroute "$target" ;;
+        dns)       native_dns "$target" ;;
+        whois)     native_whois "$target" ;;
+        whoisip)   native_whois "$target" ;;
+        portcheck) native_portcheck "$target" ;;
+        myip)      native_myip ;;
+        localnet)  native_localnet ;;
+        ssl)       native_ssl "$target" ;;
+        *)         return 1 ;;
+    esac
+    return 0
+}
+
+is_native() {
+    case "$1" in
+        ping|trace|dns|whois|whoisip|portcheck|myip|localnet|ssl) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+run_tool() {
+    local num="$1" label="$2" cat="$3" target="$4"
+
+    clear
+    echo
+    cl "$DGREEN" "  ╔══════════════════════════════════════════════════════════╗"
+    printf "  ║  ${RED}${BOLD}[%s] %s${RESET}${DGREEN}%*s║\n" "$num" "${label^^}" "$(( 52 - ${#label} - ${#num} ))" ""
+    if [[ -n "$target" ]]; then
+        printf "  ║  ${CYAN}TARGET: ${WHITE}%s${RESET}${DGREEN}%*s  ║\n" "$target" "$(( 50 - ${#target} ))" ""
+    fi
+    cl "$DGREEN" "  ╚══════════════════════════════════════════════════════════╝"
+    echo
+
+    # Ejecutar en background y mostrar spinner
+    local tmpfile
+    tmpfile=$(mktemp /tmp/dc_result.XXXXXX)
+
+    if is_native "$cat"; then
+        run_native "$cat" "$target" > "$tmpfile" 2>&1 &
+    else
+        call_claude "$cat" "$target" > "$tmpfile" 2>&1 &
+    fi
+    BGPID=$!
+
+    spinner &
+    local SPINPID=$!
+    wait "$BGPID" 2>/dev/null
+    kill "$SPINPID" 2>/dev/null
+    wait "$SPINPID" 2>/dev/null
+
+    echo
+    sep
+
+    # Mostrar resultados
+    if [[ -s "$tmpfile" ]]; then
+        while IFS= read -r line; do
+            print_result_line "$line"
+        done < "$tmpfile"
+    else
+        cl "$RED" "[!] Sin respuesta."
+    fi
+    rm -f "$tmpfile"
+
+    echo
+    sep
+    local ts
+    ts=$(date "+%Y-%m-%d %H:%M:%S")
+    cl "$DGREEN" "  ✓ Consulta completada — $ts"
+    echo
+}
+
+# ─── Bucle principal ──────────────────────────────────────────────────────────
+main() {
+    # Verificar dependencias
+    local missing=()
+    command -v curl &>/dev/null || missing+=("curl")
+    command -v jq   &>/dev/null || missing+=("jq")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        cl "$RED" "[!] Faltan dependencias: ${missing[*]}"
+        cl "$YELLOW" "[*] Instálalas con: sudo pacman -S ${missing[*]}"
+        exit 1
+    fi
+
+    while true; do
+        print_menu
+        read -r choice
+
+        [[ -z "$choice" ]] && continue
+
+        # Salir
+        if [[ "$choice" =~ ^(0|00|q|quit|exit|salir)$ ]]; then
+            clear
+            echo
+            typewrite "  Desconectando de Spy Dragon..." "$RED" "0.04"
+            sleep 0.3
+            typewrite "  Borrando rastros..." "$DGREEN" "0.03"
+            sleep 0.3
+            typewrite "  CONNECTION CLOSED." "$RED" "0.05"
+            echo
+            exit 0
+        fi
+
+        # Número con cero a la izquierda
+        local num
+        num=$(printf "%02d" "$choice" 2>/dev/null)
+
+        # Buscar herramienta
+        local found_tool=""
+        for t in "${TOOLS[@]}"; do
+            local tnum="${t%%|*}"
+            if [[ "$tnum" == "$num" ]]; then
+                found_tool="$t"
+                break
+            fi
+        done
+
+        if [[ -z "$found_tool" ]]; then
+            cl "$RED" "\n  [!] Opción inválida: '${choice}'. Elige entre 00-40."
+            sleep 1.5
+            continue
+        fi
+
+        # Parsear campos
+        IFS='|' read -r fnum flabel fcat finput <<< "$found_tool"
+
+        # Pedir target si es necesario
+        local target=""
+        if [[ -n "$finput" ]]; then
+            echo
+            printf "  ${CYAN}[*] ${finput}:${RESET} "
+            read -r target
+            if [[ -z "$target" ]]; then
+                cl "$YELLOW" "\n  [!] No ingresaste ningún valor. Cancelado."
+                sleep 1
+                continue
+            fi
+        fi
+
+        run_tool "$fnum" "$flabel" "$fcat" "$target"
+
+        printf "\n  ${DGREEN}Presiona ${GREEN}ENTER${RESET}${DGREEN} para volver al menú...${RESET}"
+        read -r
+    done
+}
+
+# Capturar Ctrl+C limpiamente
+trap 'echo -e "\n\n  ${YELLOW}[Ctrl+C] — Escribe 00 para salir.${RESET}\n"; sleep 1' INT
+
+main "$@"
